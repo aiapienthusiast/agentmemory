@@ -124,7 +124,7 @@ export function registerCompressionRecovery(sdk: IIIClient, kv: StateKV): void {
         if (row.sessionId === session.id && needsCompression(row) &&
             (!scope.agentId || (row.agentId ?? session.agentId) === scope.agentId)) {
           const source = compressionRaw(row);
-          const metadata = "title" in row ? row.compression : undefined;
+          const metadata = row.compression;
           const item = {
             sessionId: session.id, observationId: row.id,
             status: metadata?.status ?? "raw",

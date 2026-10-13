@@ -89,18 +89,45 @@ describe("compression recovery", () => {
     expect(await r.call("mem::compression-retry", { sessionId: "session-recovery", _caller_worker_id: "engine-worker" })).toMatchObject({ recovered: 1 });
   });
 
-  it("recovers legacy raw rows with bounded private-data filtering and stops a batch when the provider is down", async () => {
-    const r = rig({ name: "test", compress: vi.fn(async () => { throw new Error("down"); }), summarize: vi.fn() });
+  it.each(["provider", "parse"])("preserves oversized legacy raw through %s failure and restart until successful bounded recovery", async (failure) => {
+    const r = rig({ name: "test", compress: vi.fn(async () => {
+      if (failure === "provider") throw new Error("down");
+      return "invalid output";
+    }), summarize: vi.fn() });
     await r.seed("a"); await r.seed("b");
-    await r.kv.set(KV.observations("session-recovery"), "a", { ...raw("a"), toolOutput: raw().toolOutput + "z".repeat(40_000) });
-    expect(await r.call("mem::compression-retry", { project: "project-a", limit: 100 })).toMatchObject({ success: false, attempted: 1, recovered: 0, failed: 1, items: [{ truncated: true, retryable: true }] });
-    expect(r.provider.compress).toHaveBeenCalledOnce();
+    const original = { ...raw("a"), toolOutput: raw().toolOutput + "z".repeat(40_000) + "preserved-tail-marker" };
+    await r.kv.set(KV.observations("session-recovery"), "a", original);
+    const result = await r.call("mem::compression-retry", { project: "project-a", limit: 100 });
+    expect(result).toMatchObject({ success: false, attempted: 1, recovered: 0, failed: 1, items: [{ truncated: true, retryable: true }] });
+    expect(r.provider.compress).toHaveBeenCalledTimes(failure === "provider" ? 1 : 2);
     const failed = await r.kv.get(KV.observations("session-recovery"), "a");
-    expect(failed.source.truncated).toBe(true);
-    expect(Buffer.byteLength(JSON.stringify(failed.source))).toBeLessThanOrEqual(16 * 1024);
-    expect(JSON.stringify(failed)).not.toContain("hidden-canary");
-    expect(JSON.stringify(vi.mocked(r.provider.compress).mock.calls)).not.toContain("hidden-canary");
+    const { compression, ...retained } = failed;
+    expect(retained).toEqual(original);
+    expect(compression).toMatchObject({ attempts: 1, status: "failed", error: failure === "provider" ? "compression_failed" : "parse_failed" });
+    expect(getSearchIndex().has("a")).toBe(false);
+    expect(r.sdk.trigger.mock.calls.some(([input]) => input.function_id === "stream::send")).toBe(false);
+    const modelCalls = JSON.stringify(vi.mocked(r.provider.compress).mock.calls);
+    for (const canary of ["hidden-canary", "preserved-tail-marker"]) {
+      expect(modelCalls).not.toContain(canary);
+      expect(JSON.stringify(result)).not.toContain(canary);
+    }
     expect(await r.kv.get(KV.observations("session-recovery"), "b")).toHaveProperty("hookType");
+    const restarted = rig(undefined, r.kv);
+    const inspect = await restarted.call("api::compression-status", { method: "GET", headers: { authorization: "Bearer test-auth" }, query_params: { sessionId: "session-recovery" } });
+    expect(inspect).toMatchObject({ status_code: 200, body: { items: [{ observationId: "a", status: "failed", attempts: 1, retryable: true }, { observationId: "b", status: "raw", attempts: 0 }] } });
+    expect(JSON.stringify(inspect)).not.toContain("hidden-canary");
+    expect(JSON.stringify(inspect)).not.toContain("preserved-tail-marker");
+    expect(restarted.provider.compress).not.toHaveBeenCalled();
+    expect(await restarted.call("mem::compression-retry", { sessionId: "session-recovery", limit: 1 })).toMatchObject({ success: true, recovered: 1, items: [{ truncated: true }] });
+    const recovered = await r.kv.get(KV.observations("session-recovery"), "a");
+    expect(recovered).toMatchObject({ id: original.id, timestamp: original.timestamp, source: { truncated: true }, compression: { attempts: 2, status: "complete" } });
+    expect(recovered).not.toHaveProperty("toolOutput");
+    expect(Buffer.byteLength(JSON.stringify(recovered.source))).toBeLessThanOrEqual(16 * 1024);
+    expect(JSON.stringify(recovered)).not.toContain("hidden-canary");
+    expect(JSON.stringify(restarted.sdk.trigger.mock.calls)).not.toContain("hidden-canary");
+    expect(JSON.stringify(restarted.sdk.trigger.mock.calls)).not.toContain("preserved-tail-marker");
+    expect(getSearchIndex().has("a")).toBe(true);
+    expect(await r.kv.get(KV.sessions, "session-recovery")).toMatchObject({ observationCount: 1 });
   });
 
   it("single-flights concurrent retries within one store while keeping independent stores separate", async () => {
@@ -115,7 +142,7 @@ describe("compression recovery", () => {
     expect(await b.kv.get(KV.observations("session-recovery"), raw().id)).toMatchObject({ compression: { attempts: 1, status: "complete" } });
   });
 
-  it.each(["delete", "replace"])("discards a late model completion after %s", async (operation) => {
+  it.each([["delete", xml], ["replace", xml], ["delete", "invalid"], ["replace", "invalid"]])("discards a late model result after %s (%s)", async (operation, output) => {
     const model = deferred<string>(); const provider = { name: "test", compress: vi.fn(() => model.promise), summarize: vi.fn() };
     const r = rig(provider); await r.seed();
     const task = r.call("mem::compression-retry", { sessionId: "session-recovery" });
@@ -126,7 +153,7 @@ describe("compression recovery", () => {
       else await r.kv.set(KV.observations("session-recovery"), raw().id, replacement);
       getSearchIndex().remove(raw().id); vectorIndexRemove(raw().id);
     });
-    model.resolve(xml);
+    model.resolve(output);
     expect(await task).toMatchObject({ recovered: 0, items: [{ outcome: "changed" }] });
     expect(await r.kv.get(KV.observations("session-recovery"), raw().id)).toEqual(operation === "delete" ? null : replacement);
     expect(getSearchIndex().has(raw().id)).toBe(false);
@@ -141,7 +168,10 @@ describe("compression recovery", () => {
     await r.kv.set(KV.sessions, session.id, { ...session, project: "project-b", agentId: "agent-b" });
     model.resolve(xml);
     expect(await task).toMatchObject({ recovered: 0, items: [{ outcome: "changed" }] });
-    expect(await r.kv.get(KV.observations(session.id), raw().id)).toMatchObject({ title: "Read", compression: { status: "pending" } });
+    const { compression, ...retained } = await r.kv.get(KV.observations(session.id), raw().id);
+    expect(compression.status).toBe("pending");
+    expect(retained).toEqual(raw());
+    expect(getSearchIndex().has(raw().id)).toBe(false);
   });
 
   it("does not restore a vector after deletion while embedding is pending", async () => {
@@ -167,15 +197,30 @@ describe("compression recovery", () => {
     expect(result.items).toHaveLength(1); expect(r.provider.compress).not.toHaveBeenCalled();
   });
 
-  it("reports unavailable source immediately when claiming a legacy row exhausts its source budget", async () => {
+  it("leaves legacy raw unchanged when source budget is exhausted and recovers after budget is freed", async () => {
     const r = rig(); await r.seed();
+    const original = await r.kv.get(KV.observations("session-recovery"), raw().id);
     const seed = buildSyntheticCompression(raw("source-budget"));
     await r.kv.set(KV.observations(seed.sessionId), seed.id, { ...seed, source: { ...seed.source, toolOutput: "x".repeat(8 * 1024 * 1024) } });
     expect(await r.call("mem::compression-retry", { sessionId: seed.sessionId })).toMatchObject({
       recovered: 0, failed: 1, items: [{ retryable: false, error: "source_unavailable" }],
     });
     expect(r.provider.compress).not.toHaveBeenCalled();
-    expect(await r.kv.get(KV.observations(seed.sessionId), raw().id)).toMatchObject({ compression: { status: "failed", error: "source_unavailable" } });
+    expect(await r.kv.get(KV.observations(seed.sessionId), raw().id)).toEqual(original);
+    expect(getSearchIndex().has(raw().id)).toBe(false);
+    await r.kv.delete(KV.observations(seed.sessionId), seed.id);
+    expect(await r.call("mem::compression-retry", { sessionId: seed.sessionId })).toMatchObject({ success: true, recovered: 1 });
+    expect(await r.kv.get(KV.observations(seed.sessionId), raw().id)).toMatchObject({ compression: { status: "complete", attempts: 1 } });
+  });
+
+  it("leaves legacy rows with no usable source unchanged", async () => {
+    const r = rig(); await r.seed();
+    const original = { ...raw(), toolOutput: undefined };
+    await r.kv.set(KV.observations(original.sessionId), original.id, original);
+    expect(await r.call("mem::compress", { sessionId: original.sessionId, observationId: original.id })).toMatchObject({ success: false, error: "source_unavailable", retryable: false });
+    expect(await r.kv.get(KV.observations(original.sessionId), original.id)).toEqual(original);
+    expect(getSearchIndex().has(original.id)).toBe(false);
+    expect(r.provider.compress).not.toHaveBeenCalled();
   });
 
   it.each([xml, "invalid late output"])("bounds hung model calls without starting correction calls after timeout (%s)", async (lateOutput) => {
@@ -185,7 +230,9 @@ describe("compression recovery", () => {
     expect(await task).toMatchObject({ success: false, failed: 1 });
     model.resolve(lateOutput); await vi.advanceTimersByTimeAsync(1);
     expect(r.provider.compress).toHaveBeenCalledOnce();
-    expect(await r.kv.get(KV.observations("session-recovery"), raw().id)).toMatchObject({ compression: { status: "failed" } });
+    const { compression, ...retained } = await r.kv.get(KV.observations("session-recovery"), raw().id);
+    expect(compression).toMatchObject({ status: "failed", attempts: 1 });
+    expect(retained).toEqual(raw());
   });
 
   it("stops starting work after the batch budget while allowing its current attempt to finish", async () => {

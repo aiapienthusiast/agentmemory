@@ -75,7 +75,7 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllEnvs());
 
 describe.each(["observe", "compress"] as const)("live %s source budget", (mode) => {
-  it("truncates to the remaining session allowance, then omits source while preserving summaries", async () => {
+  it("truncates to the remaining session allowance, then preserves observations without adding source", async () => {
     const expected = withoutObservationSource(await rig(mode).write());
     const r = rig(mode);
     await r.seedSource();
@@ -85,8 +85,7 @@ describe.each(["observe", "compress"] as const)("live %s source budget", (mode) 
     const second = await r.write();
     expect(second.source).toBeUndefined();
     if (mode === "compress") {
-      expect(second.compression).toMatchObject({ status: "failed", error: "source_unavailable", attempts: 0 });
-      expect(second.narrative).toContain("captured evidence");
+      expect(second).toEqual(raw(second.id));
     } else expect(withoutObservationSource(second)).toEqual({ ...expected, id: second.id, compressedAt: second.compressedAt });
     const rows = await r.kv.list(scope);
     expect(sourceBytes(rows)).toBeLessThanOrEqual(SESSION_SOURCE_MAX_BYTES);
@@ -105,7 +104,7 @@ describe.each(["observe", "compress"] as const)("live %s source budget", (mode) 
     expect(payloadByteLength({ result: await r.kv.list(scope) })).toBeLessThan(SAFE_PAYLOAD_BYTES);
   });
 
-  it("preserves a completed summary when existing summaries leave no frame allowance", async () => {
+  it("preserves the observation when existing summaries leave no frame allowance", async () => {
     const expected = withoutObservationSource(await rig(mode).write());
     const r = rig(mode);
     const seed = withoutObservationSource(buildSyntheticCompression(raw("oversized-summary")));
@@ -114,8 +113,7 @@ describe.each(["observe", "compress"] as const)("live %s source budget", (mode) 
     const saved = await r.write();
     expect(saved.source).toBeUndefined();
     if (mode === "compress") {
-      expect(saved.compression).toMatchObject({ status: "failed", error: "source_unavailable", attempts: 0 });
-      expect(saved.narrative).toContain("captured evidence");
+      expect(saved).toEqual(raw(saved.id));
     } else expect(withoutObservationSource(saved)).toEqual({ ...expected, id: saved.id, compressedAt: saved.compressedAt });
   });
 });

@@ -31,7 +31,7 @@ The REST API is the primary surface. All paths are under `http://localhost:3111`
 | GET | `/agentmemory/commits` |
 | POST | `/agentmemory/compress-file` |
 | GET | `/agentmemory/compression` |
-| GET | `/agentmemory/compression/retry` |
+| POST | `/agentmemory/compression/retry` |
 | GET | `/agentmemory/config/flags` |
 | POST | `/agentmemory/consolidate` |
 | POST | `/agentmemory/consolidate-pipeline` |

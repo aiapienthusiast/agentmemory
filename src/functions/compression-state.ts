@@ -7,7 +7,7 @@ import { withKeyedLock } from "../state/keyed-mutex.js";
 import { rawFromObservationSource } from "./observation-source.js";
 import { scrubRecord } from "./privacy.js";
 
-export type StoredObservation = RawObservation | CompressedObservation;
+export type StoredObservation = (RawObservation & { compression?: ObservationCompression }) | CompressedObservation;
 
 export function pendingCompression(attempts = 0): ObservationCompression {
   return { status: "pending", revision: randomUUID(), attempts };

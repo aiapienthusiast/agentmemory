@@ -82,19 +82,20 @@ export function registerCompressFunction(
       const rows = await kv.list<CompressedObservation>(KV.observations(sessionId));
       const fallback = "title" in stored ? stored : budgetLiveObservationSource(buildSyntheticCompression(scrubRecord(stored)), rows);
       const raw = compressionRaw(fallback);
+      if (!raw && !("title" in stored)) return { unavailable: true as const };
       const compression: ObservationCompression = {
-        ...pendingCompression((fallback.compression?.attempts ?? 0) + (raw ? 1 : 0)),
+        ...pendingCompression((stored.compression?.attempts ?? 0) + (raw ? 1 : 0)),
         ...(raw ? { lastAttemptAt: new Date().toISOString() } : { status: "failed" as const, error: "source_unavailable" as const }),
       };
-      const claimed = { ...fallback, compression };
+      const claimed = { ...stored, compression };
       await kv.set(KV.observations(sessionId), observationId, claimed);
-      indexObservation(claimed);
-      return { raw, claimed, revision: observationRevision(claimed) };
+      if ("title" in claimed) indexObservation(claimed);
+      return { raw, claimed, fallback, revision: observationRevision(claimed) };
     });
     if (!prepared) return { success: false, error: "observation_not_found", skipped: true, retryable: false };
     if ("skipped" in prepared) return { success: true, skipped: true };
-    if (!prepared.raw) return { success: false, error: "source_unavailable", retryable: false };
-    const { raw, claimed, revision } = prepared;
+    if ("unavailable" in prepared || !prepared.raw) return { success: false, error: "source_unavailable", retryable: false };
+    const { raw, claimed, fallback, revision } = prepared;
 
     async function fail(error: NonNullable<ObservationCompression["error"]>): Promise<CompressResult> {
       const changed = await withKeyedLock(`obs:${sessionId}`, async () => {
@@ -108,7 +109,7 @@ export function registerCompressFunction(
       await metricsStore?.record("mem::compress", Date.now() - startMs, false).catch(() => {});
       return changed
         ? { success: false, error: "observation_changed", skipped: true, retryable: false }
-        : { success: false, error, retryable: true, ...(claimed.source?.truncated ? { sourceTruncated: true } : {}) };
+        : { success: false, error, retryable: true, ...(fallback.source?.truncated ? { sourceTruncated: true } : {}) };
     }
 
     try {
@@ -162,7 +163,7 @@ export function registerCompressFunction(
       }
       const qualityScore = scoreCompression(result.data);
       const candidate: CompressedObservation = {
-        ...claimed,
+        ...fallback,
         ...result.data,
         compressedAt: new Date().toISOString(),
         confidence: qualityScore / 100,

@@ -103,9 +103,9 @@ describe("compression output boundaries", () => {
     const r = rig(provider);
     expect(await r.call()).toEqual({ success: false, error: "parse_failed", retryable: true });
     expect(provider.compress).toHaveBeenCalledTimes(2);
-    expect(r.stored()).toMatchObject({ source: { toolOutput: raw.toolOutput }, compression: { status: "failed" } });
+    expect(r.stored()).toMatchObject({ ...raw, compression: { status: "failed" } });
     expect((r.stored() as CompressedObservation).compression?.status).toBe("failed");
-    expect(search.add).toHaveBeenCalledWith(expect.objectContaining({ source: { ...buildSyntheticCompression(raw).source } }));
+    expect(search.add).not.toHaveBeenCalled();
     expect(search.vector).not.toHaveBeenCalled();
     expect(r.trigger).not.toHaveBeenCalled();
     expect(r.record).toHaveBeenCalledExactlyOnceWith("mem::compress", expect.any(Number), false);
@@ -171,7 +171,7 @@ describe("compression validation and retry", () => {
       .mockRejectedValueOnce(new Error("provider unavailable"));
     const r = rig(provider);
     expect(await r.call()).toEqual({ success: false, error: "compression_failed", retryable: true });
-    expect(r.stored()).toMatchObject({ source: { toolOutput: raw.toolOutput }, compression: { status: "failed" } });
+    expect(r.stored()).toMatchObject({ ...raw, compression: { status: "failed" } });
     expect((r.stored() as CompressedObservation).compression?.status).toBe("failed");
     expect(provider.compress).toHaveBeenCalledTimes(2);
     expect(r.record).toHaveBeenCalledExactlyOnceWith("mem::compress", expect.any(Number), false);

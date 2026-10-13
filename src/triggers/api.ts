@@ -931,12 +931,22 @@ export function registerApiTriggers(
   });
 
   registerCompressionApi(sdk, secret);
-  sdk.registerTrigger({ type: "http", function_id: "api::compression-status", config: {
-    api_path: "/agentmemory/compression", http_method: "GET",
-  } });
-  sdk.registerTrigger({ type: "http", function_id: "api::compression-retry", config: {
-    api_path: "/agentmemory/compression/retry", http_method: "POST",
-  } });
+  sdk.registerTrigger({
+    type: "http",
+    function_id: "api::compression-status",
+    config: {
+      http_method: "GET",
+      api_path: "/agentmemory/compression",
+    },
+  });
+  sdk.registerTrigger({
+    type: "http",
+    function_id: "api::compression-retry",
+    config: {
+      http_method: "POST",
+      api_path: "/agentmemory/compression/retry",
+    },
+  });
 
   sdk.registerFunction("api::compress-file", 
     async (req: HttpRequest<{ filePath: string }>): Promise<Response> => {

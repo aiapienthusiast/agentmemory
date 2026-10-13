@@ -180,7 +180,9 @@ export function registerAutoForgetFunction(sdk: IIIClient, kv: StateKV): void {
                   vectorIndexRemove(obs.id);
                   return current;
                 });
-              } catch {}
+              } catch {
+                logger.warn("Auto-forget observation cleanup failed");
+              }
               if (removed) {
                 await unindexObservationSession(kv, obs.id).catch(() => {});
                 if (removed.imageData) await decrementImageRef(kv, sdk, removed.imageData);
