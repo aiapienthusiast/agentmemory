@@ -46,8 +46,9 @@ function rig(mode: "observe" | "compress") {
   let nextId = 0;
   async function write(id = `live-${nextId++}`): Promise<CompressedObservation> {
     if (mode === "compress") {
+      if (!await kv.get(scope, id)) await kv.set(scope, id, raw(id));
       const result = await handlers.get("mem::compress")!({ observationId: id, sessionId, raw: raw(id) });
-      expect(result.success).toBe(true);
+      if (!result.success) expect(result.error).toBe("source_unavailable");
     } else {
       const result = await handlers.get("mem::observe")!({ sessionId, timestamp: raw(id).timestamp, hookType: "post_tool_use", data: { tool_name: "Read", tool_output: output } });
       id = result.observationId;
@@ -83,7 +84,10 @@ describe.each(["observe", "compress"] as const)("live %s source budget", (mode) 
     expect(payloadByteLength(first.source)).toBeLessThan(payloadByteLength(buildSyntheticCompression(raw("unbounded")).source));
     const second = await r.write();
     expect(second.source).toBeUndefined();
-    expect(withoutObservationSource(second)).toEqual({ ...expected, id: second.id, compressedAt: second.compressedAt });
+    if (mode === "compress") {
+      expect(second.compression).toMatchObject({ status: "failed", error: "source_unavailable", attempts: 0 });
+      expect(second.narrative).toContain("captured evidence");
+    } else expect(withoutObservationSource(second)).toEqual({ ...expected, id: second.id, compressedAt: second.compressedAt });
     const rows = await r.kv.list(scope);
     expect(sourceBytes(rows)).toBeLessThanOrEqual(SESSION_SOURCE_MAX_BYTES);
     expect(payloadByteLength({ result: rows })).toBeLessThan(SAFE_PAYLOAD_BYTES);
@@ -109,7 +113,10 @@ describe.each(["observe", "compress"] as const)("live %s source budget", (mode) 
     await r.kv.set(scope, seed.id, seed);
     const saved = await r.write();
     expect(saved.source).toBeUndefined();
-    expect(withoutObservationSource(saved)).toEqual({ ...expected, id: saved.id, compressedAt: saved.compressedAt });
+    if (mode === "compress") {
+      expect(saved.compression).toMatchObject({ status: "failed", error: "source_unavailable", attempts: 0 });
+      expect(saved.narrative).toContain("captured evidence");
+    } else expect(withoutObservationSource(saved)).toEqual({ ...expected, id: saved.id, compressedAt: saved.compressedAt });
   });
 });
 

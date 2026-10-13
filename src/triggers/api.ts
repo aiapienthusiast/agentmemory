@@ -54,6 +54,7 @@ import { isValidEventId } from "../capture/event-id.js";
 import { getCaptureController, type CaptureResult } from "../functions/capture.js";
 import { withoutObservationSource } from "../functions/observation-source.js";
 import { clearSessionFinalize, scheduleSessionFinalize } from "../functions/session-finalize.js";
+import { registerCompressionApi } from "./compression.js";
 import {
   getFinalizeIdleMs,
   isGraphExtractionEnabled,
@@ -928,6 +929,14 @@ export function registerApiTriggers(
       middleware_function_ids: ["middleware::api-auth"],
     },
   });
+
+  registerCompressionApi(sdk, secret);
+  sdk.registerTrigger({ type: "http", function_id: "api::compression-status", config: {
+    api_path: "/agentmemory/compression", http_method: "GET",
+  } });
+  sdk.registerTrigger({ type: "http", function_id: "api::compression-retry", config: {
+    api_path: "/agentmemory/compression/retry", http_method: "POST",
+  } });
 
   sdk.registerFunction("api::compress-file", 
     async (req: HttpRequest<{ filePath: string }>): Promise<Response> => {

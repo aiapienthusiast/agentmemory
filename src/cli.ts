@@ -105,6 +105,7 @@ const ALL_TOOLS_COUNT = getAllTools().length;
 const CORE_TOOLS_COUNT = getAllTools().filter((t) => ESSENTIAL_TOOLS.has(t.name)).length;
 import { resolveDataDir } from "./cli-data-dir.js";
 import { runCaptureCommand } from "./cli/capture.js";
+import { runCompressionCommand } from "./cli/compression.js";
 import { bearerHeaders, resolveClientSecret } from "./secret-store.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -239,6 +240,10 @@ Commands:
   capture [--drain]  Show capture health: the local offline spool and the server
                      inbox (pending, retrying, dead letters). --drain sends
                      spooled observations now. --json for machine output.
+  compression        Inspect pending or failed observation compression.
+                     --session <id> or --project <name> selects the scope.
+                     --agent-id <id> narrows it; --limit <N> bounds the batch.
+                     --retry explicitly retries compression; --json for machine output.
   import-jsonl [p]   Import Claude Code JSONL transcripts (default: ~/.claude/projects)
                      --max-files <N> | --max-files=<N>: override scan cap (default 200, max 1000;
                      out-of-range is rejected; for trees >1000 files, batch by subdirectory)
@@ -302,7 +307,7 @@ if (toolsIdx !== -1 && args[toolsIdx + 1]) {
   process.env["AGENTMEMORY_TOOLS"] = toolsMode;
 }
 
-const URL_CLIENT_COMMANDS = new Set(["status", "doctor", "mcp", "capture"]);
+const URL_CLIENT_COMMANDS = new Set(["status", "doctor", "mcp", "capture", "compression"]);
 let hasExplicitLocalPortOverride = false;
 let selectedInstance = 0;
 
@@ -4230,6 +4235,16 @@ async function runCapture(): Promise<void> {
   process.exit(code);
 }
 
+async function runCompression(): Promise<void> {
+  const base = getBaseUrl();
+  const code = await runCompressionCommand({
+    base,
+    args: args.slice(1),
+    secret: resolveClientSecret(base),
+  });
+  process.exit(code);
+}
+
 const commands: Record<string, () => Promise<void>> = {
   init: runInit,
   connect: runConnectCmd,
@@ -4243,6 +4258,7 @@ const commands: Record<string, () => Promise<void>> = {
   mcp: runMcp,
   "import-jsonl": runImportJsonl,
   capture: runCapture,
+  compression: runCompression,
 };
 
 const first = args[0] ?? "";

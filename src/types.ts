@@ -82,6 +82,14 @@ export interface ObservationSource {
   payload?: unknown;
 }
 
+export interface ObservationCompression {
+  status: "pending" | "failed" | "complete";
+  revision: string;
+  attempts: number;
+  lastAttemptAt?: string;
+  error?: "dispatch_failed" | "compression_failed" | "parse_failed" | "validation_failed" | "source_unavailable";
+}
+
 export interface CompressedObservation {
   id: string;
   sessionId: string;
@@ -104,6 +112,7 @@ export interface CompressedObservation {
   origin?: Origin;
   captureKey?: string;
   compressedAt?: string;
+  compression?: ObservationCompression;
 }
 
 export type ObservationType =
